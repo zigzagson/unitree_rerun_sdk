@@ -1,0 +1,12 @@
+format=unitree_rerun_telemetry_bin
+format_version=1
+start_unix_time_ns=1782790655328005066
+start_iso_time=2026-06-30 11:37:35.328005066
+telemetry=telemetry.bin
+summary=summary.csv
+topic=rt/lowstate
+network_mode=0
+network_interface=eno1
+motor_count=29
+sample_hz=20
+summary_hz=1
