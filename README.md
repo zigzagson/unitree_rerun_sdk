@@ -83,6 +83,12 @@ Start recording:
 ./record.sh
 ```
 
+Use a different network interface for one run:
+
+```bash
+./record.sh eno1
+```
+
 If `build/unitree_rerun_recorder` does not exist yet, `record.sh` builds it
 first.
 
