@@ -10,10 +10,26 @@ The robot-side C++ recorder is intentionally small:
 - no YAML/JSON/protobuf dependency
 - writes actual wall-clock timestamps in nanoseconds
 
-The Rerun dependency is moved to Python tooling:
+Install Unitree SDK2 before building this recorder:
 
 ```bash
-python3 -m pip install rerun-sdk
+git clone https://github.com/unitreerobotics/unitree_sdk2.git
+cd unitree_sdk2
+mkdir -p build
+cd build
+cmake ..
+make -j8
+sudo make install
+```
+
+If Unitree SDK2 is installed somewhere other than the default system prefix,
+make sure that prefix is visible through `CMAKE_PREFIX_PATH` when configuring
+this project.
+
+Install the Python Rerun SDK for conversion and viewing:
+
+```bash
+pip3 install rerun-sdk
 ```
 
 This avoids building the C++ Rerun SDK and Arrow stack on the robot.
@@ -42,8 +58,11 @@ Reserved raw fields such as `q_raw`, `dq_raw`, and `ddq_raw` are not recorded.
 ## Build
 
 ```bash
-cmake -S unitree_rerun_sdk -B unitree_rerun_sdk/build
-cmake --build unitree_rerun_sdk/build -j
+cd unitree_rerun_sdk
+mkdir -p build
+cd build
+cmake ..
+make -j8
 ```
 
 ## Record
@@ -71,7 +90,7 @@ Stop with `Ctrl-C`.
 Install Python Rerun SDK once:
 
 ```bash
-python3 -m pip install rerun-sdk
+pip3 install rerun-sdk
 ```
 
 Convert a session:
@@ -136,6 +155,28 @@ python3 unitree_rerun_sdk/tools/extract_tn.py \
   unitree_logs/YYYYMMDD_HHMMSS/telemetry.bin \
   --motor m00 --motor m07
 ```
+
+Plot extracted TN scatter data against a Unitree actuator torque-speed limit:
+
+```bash
+python3 unitree_rerun_sdk/tools/plot_tn.py \
+  unitree_logs/YYYYMMDD_HHMMSS/tn_csv \
+  --actuator Go2HV
+```
+
+This writes dependency-free SVG plots and an over-limit summary:
+
+```text
+unitree_logs/YYYYMMDD_HHMMSS/tn_plots/
+  tn_all.svg
+  m00.svg
+  m01.svg
+  summary.csv
+```
+
+Available `--actuator` values mirror Unitree's published `UnitreeActuatorCfg`
+classes: `Go2HV`, `M107_15`, `M107_24`, `N5010_16`, `N5020_16`,
+`N7520_14p3`, `N7520_22p5`, and `W4010_25`.
 
 ## Demo Data
 
