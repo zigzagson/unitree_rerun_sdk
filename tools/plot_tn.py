@@ -13,6 +13,10 @@ from pathlib import Path
 from telemetry_bin import RAD_S_TO_RPM
 
 
+DEFAULT_ACTUATOR = "Go2HV"
+DEFAULT_ACTUATOR_MAP = Path("config/motor_actuators.conf")
+
+
 @dataclass(frozen=True)
 class ActuatorLimit:
     name: str
@@ -77,14 +81,33 @@ COLORS = {
 
 def default_input_csv(path: Path) -> Path:
     if path.is_dir():
+        if (path / "tn_all.csv").is_file():
+            return path / "tn_all.csv"
+        if (path / "tn_csv" / "tn_all.csv").is_file():
+            return path / "tn_csv" / "tn_all.csv"
         return path / "tn_all.csv"
     return path
 
 
-def default_output_dir(input_path: Path) -> Path:
-    if input_path.is_dir():
-        return input_path.parent / "tn_plots"
-    return input_path.parent / "tn_plots"
+def latest_tn_dir(logs_dir: Path = Path("unitree_logs")) -> Path:
+    sessions = sorted(path for path in logs_dir.iterdir() if (path / "tn_csv" / "tn_all.csv").is_file())
+    if not sessions:
+        raise FileNotFoundError(f"no tn_csv outputs found under {logs_dir}; run tools/extract_tn.py first")
+    return sessions[-1] / "tn_csv"
+
+
+def resolve_input_path(input_path: Path | None) -> Path:
+    if input_path is None:
+        return latest_tn_dir()
+    return input_path
+
+
+def default_output_dir(input_path: Path, input_csv: Path) -> Path:
+    if input_path.is_dir() and (input_path / "tn_csv" / "tn_all.csv").is_file():
+        return input_path / "tn_plots"
+    if input_csv.parent.name == "tn_csv":
+        return input_csv.parent.parent / "tn_plots"
+    return input_csv.parent / "tn_plots"
 
 
 def parse_motor_filter(values: list[str] | None) -> set[str] | None:
@@ -99,6 +122,33 @@ def parse_motor_filter(values: list[str] | None) -> set[str] | None:
             index = int(value)
         motors.add(f"m{index:02d}")
     return motors
+
+
+def parse_actuator_map(path: Path | None) -> dict[str, str]:
+    if path is None or not path.is_file():
+        return {}
+
+    out = {}
+    with path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if "=" not in line:
+                raise ValueError(f"invalid actuator map line {line_no}: {line}")
+            motor, actuator = [part.strip() for part in line.split("=", 1)]
+            motor_filter = parse_motor_filter([motor])
+            if not motor_filter:
+                raise ValueError(f"invalid motor on actuator map line {line_no}: {motor}")
+            motor_name = next(iter(motor_filter))
+            if actuator not in ACTUATORS:
+                raise ValueError(f"unknown actuator on line {line_no}: {actuator}")
+            out[motor_name] = actuator
+    return out
+
+
+def actuator_for_motor(motor: str, actuator_map: dict[str, str], fallback: str) -> ActuatorLimit:
+    return ACTUATORS[actuator_map.get(motor, fallback)]
 
 
 def read_rows(path: Path, motors: set[str] | None) -> list[dict]:
@@ -192,16 +242,28 @@ def limit_polyline(limit: ActuatorLimit, y_nm: float, max_x: float, max_y: float
     return " ".join(f"{scale_x(x, max_x):.1f},{scale_y(y, max_y):.1f}" for x, y in points)
 
 
-def write_svg(path: Path, title: str, rows: list[dict], limit: ActuatorLimit, max_points: int) -> dict:
+def write_svg(
+    path: Path,
+    title: str,
+    rows: list[dict],
+    limits_by_motor: dict[str, ActuatorLimit],
+    fallback_limit: ActuatorLimit,
+    max_points: int,
+) -> dict:
     plotted = downsample(rows, max_points)
     checked = []
     for row in rows:
+        limit = limits_by_motor.get(row["motor"], fallback_limit)
         limit_nm = limit.torque_limit(row["speed_rad_s"], row["torque_nm"])
         checked.append({**row, "limit_nm": limit_nm, "over_limit": row["abs_torque_nm"] > limit_nm})
 
     over_count = sum(1 for row in checked if row["over_limit"])
-    max_abs_speed = max([row["abs_speed_rpm"] for row in rows] + [limit.x2_rpm])
-    max_abs_torque = max([row["abs_torque_nm"] for row in rows] + [limit.y1_nm, limit.y2_nm])
+    limits = list(limits_by_motor.values()) or [fallback_limit]
+    max_abs_speed = max([row["abs_speed_rpm"] for row in rows] + [limit.x2_rpm for limit in limits])
+    max_abs_torque = max(
+        [row["abs_torque_nm"] for row in rows]
+        + [value for limit in limits for value in (limit.y1_nm, limit.y2_nm)]
+    )
     max_x = nice_ticks(max_abs_speed * 1.06)[-1]
     max_y = nice_ticks(max_abs_torque * 1.10)[-1]
     x_ticks = nice_ticks(max_x)
@@ -212,7 +274,7 @@ def write_svg(path: Path, title: str, rows: list[dict], limit: ActuatorLimit, ma
         "<style>text{font-family:Arial,Helvetica,sans-serif;fill:#111827}.small{font-size:13px}.label{font-size:15px}.title{font-size:22px;font-weight:700}.legend{font-size:14px}</style>",
         '<rect width="100%" height="100%" fill="#FFFFFF"/>',
         f'<text class="title" x="{LEFT}" y="30">{html.escape(title)}</text>',
-        f'<text class="small" x="{WIDTH - RIGHT}" y="30" text-anchor="end">actuator: {html.escape(limit.name)}</text>',
+        f'<text class="small" x="{WIDTH - RIGHT}" y="30" text-anchor="end">actuator: {html.escape(actuator_label(limits_by_motor, fallback_limit))}</text>',
     ]
 
     for tick in x_ticks:
@@ -229,10 +291,13 @@ def write_svg(path: Path, title: str, rows: list[dict], limit: ActuatorLimit, ma
     parts.append(f'<text class="label" x="{LEFT + PLOT_W / 2:.1f}" y="{HEIGHT - 22}" text-anchor="middle">absolute speed (rpm)</text>')
     parts.append(f'<text class="label" x="22" y="{TOP + PLOT_H / 2:.1f}" text-anchor="middle" transform="rotate(-90 22 {TOP + PLOT_H / 2:.1f})">absolute torque (N*m)</text>')
 
-    parts.append(f'<polyline points="{limit_polyline(limit, limit.y1_nm, max_x, max_y)}" fill="none" stroke="{COLORS["y1"]}" stroke-width="3"/>')
-    parts.append(f'<polyline points="{limit_polyline(limit, limit.y2_nm, max_x, max_y)}" fill="none" stroke="{COLORS["y2"]}" stroke-width="3" stroke-dasharray="8 5"/>')
+    if len({limit.name for limit in limits}) == 1:
+        limit = limits[0]
+        parts.append(f'<polyline points="{limit_polyline(limit, limit.y1_nm, max_x, max_y)}" fill="none" stroke="{COLORS["y1"]}" stroke-width="3"/>')
+        parts.append(f'<polyline points="{limit_polyline(limit, limit.y2_nm, max_x, max_y)}" fill="none" stroke="{COLORS["y2"]}" stroke-width="3" stroke-dasharray="8 5"/>')
 
     for row in plotted:
+        limit = limits_by_motor.get(row["motor"], fallback_limit)
         limit_nm = limit.torque_limit(row["speed_rad_s"], row["torque_nm"])
         over = row["abs_torque_nm"] > limit_nm
         color = COLORS["over"] if over else COLORS["same" if row["same_direction"] else "opposite"]
@@ -247,9 +312,15 @@ def write_svg(path: Path, title: str, rows: list[dict], limit: ActuatorLimit, ma
         (COLORS["same"], "same direction sample"),
         (COLORS["opposite"], "opposite direction sample"),
         (COLORS["over"], "over limit sample"),
-        (COLORS["y1"], f"Y1 same dir {limit.y1_nm:g} N*m"),
-        (COLORS["y2"], f"Y2 opposite {limit.y2_nm:g} N*m"),
     ]
+    if len({limit.name for limit in limits}) == 1:
+        limit = limits[0]
+        legend_items += [
+            (COLORS["y1"], f"Y1 same dir {limit.y1_nm:g} N*m"),
+            (COLORS["y2"], f"Y2 opposite {limit.y2_nm:g} N*m"),
+        ]
+    else:
+        legend_items.append((COLORS["y1"], "per-motor actuator limits"))
     for i, (color, text) in enumerate(legend_items):
         y = legend_y + i * 21
         if i < 3:
@@ -269,12 +340,22 @@ def write_svg(path: Path, title: str, rows: list[dict], limit: ActuatorLimit, ma
         "rows": len(rows),
         "plotted": len(plotted),
         "over_limit": over_count,
+        "actuator": actuator_label(limits_by_motor, fallback_limit),
         "max_abs_speed_rpm": max(row["abs_speed_rpm"] for row in rows),
         "max_abs_torque_nm": max(row["abs_torque_nm"] for row in rows),
     }
 
 
-def write_summary(path: Path, stats: dict[str, dict], limit: ActuatorLimit) -> None:
+def actuator_label(limits_by_motor: dict[str, ActuatorLimit], fallback_limit: ActuatorLimit) -> str:
+    names = sorted({limit.name for limit in limits_by_motor.values()})
+    if not names:
+        return fallback_limit.name
+    if len(names) == 1:
+        return names[0]
+    return "mixed"
+
+
+def write_summary(path: Path, stats: dict[str, dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
@@ -295,7 +376,7 @@ def write_summary(path: Path, stats: dict[str, dict], limit: ActuatorLimit) -> N
             writer.writerow(
                 {
                     "motor": motor,
-                    "actuator": limit.name,
+                    "actuator": item["actuator"],
                     "rows": rows,
                     "plotted": item["plotted"],
                     "over_limit": item["over_limit"],
@@ -308,13 +389,24 @@ def write_summary(path: Path, stats: dict[str, dict], limit: ActuatorLimit) -> N
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="Path to tn_all.csv or a tn_csv directory")
+    parser.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        help="Path to tn_all.csv, tn_csv, or a session directory. Default: latest unitree_logs TN output",
+    )
     parser.add_argument("-o", "--output-dir", type=Path, help="Directory for SVG plots")
     parser.add_argument(
         "--actuator",
         choices=sorted(ACTUATORS),
-        default="Go2HV",
-        help="Unitree actuator limit to compare against",
+        default=DEFAULT_ACTUATOR,
+        help="Fallback actuator when a motor is not present in --actuator-map",
+    )
+    parser.add_argument(
+        "--actuator-map",
+        type=Path,
+        default=DEFAULT_ACTUATOR_MAP,
+        help="Motor-to-actuator config file. Default: config/motor_actuators.conf",
     )
     parser.add_argument(
         "--motor",
@@ -325,25 +417,46 @@ def main() -> int:
     parser.add_argument("--no-per-motor", action="store_true", help="Only write tn_all.svg")
     args = parser.parse_args()
 
-    input_csv = default_input_csv(args.input)
-    output_dir = args.output_dir or default_output_dir(args.input)
+    input_path = resolve_input_path(args.input)
+    input_csv = default_input_csv(input_path)
+    output_dir = args.output_dir or default_output_dir(input_path, input_csv)
     motors = parse_motor_filter(args.motor)
-    limit = ACTUATORS[args.actuator]
+    actuator_map = parse_actuator_map(args.actuator_map)
+    fallback_limit = ACTUATORS[args.actuator]
     rows = read_rows(input_csv, motors)
     if not rows:
         raise ValueError("no TN rows matched the input filters")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    grouped = grouped_by_motor(rows)
+    limits_by_motor = {
+        motor: actuator_for_motor(motor, actuator_map, args.actuator)
+        for motor in grouped
+    }
     stats = {
-        "all": write_svg(output_dir / "tn_all.svg", "TN scatter - all selected motors", rows, limit, args.max_points)
+        "all": write_svg(
+            output_dir / "tn_all.svg",
+            "TN scatter - all selected motors",
+            rows,
+            limits_by_motor,
+            fallback_limit,
+            args.max_points,
+        )
     }
 
     if not args.no_per_motor:
-        for motor, motor_rows in grouped_by_motor(rows).items():
-            stats[motor] = write_svg(output_dir / f"{motor}.svg", f"TN scatter - {motor}", motor_rows, limit, args.max_points)
+        for motor, motor_rows in grouped.items():
+            stats[motor] = write_svg(
+                output_dir / f"{motor}.svg",
+                f"TN scatter - {motor}",
+                motor_rows,
+                {motor: limits_by_motor[motor]},
+                fallback_limit,
+                args.max_points,
+            )
 
-    write_summary(output_dir / "summary.csv", stats, limit)
-    print(f"wrote {output_dir} ({len(rows)} rows, actuator={limit.name})")
+    write_summary(output_dir / "summary.csv", stats)
+    print(f"wrote {output_dir} ({len(rows)} rows, actuator={actuator_label(limits_by_motor, fallback_limit)})")
     return 0
 
 

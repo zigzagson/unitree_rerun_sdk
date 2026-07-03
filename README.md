@@ -67,11 +67,12 @@ make -j8
 
 ## Record
 
-Edit `examples/recorder.conf` for your network interface. On this machine the wired interface is `eno1`:
+Edit `examples/recorder.conf` if you need a different network interface. The
+default interface is `eth10`:
 
 ```ini
 network_mode=0
-network_interface=eno1
+network_interface=eth10
 sample_hz=20
 output_dir=./unitree_logs
 ```
@@ -79,9 +80,15 @@ output_dir=./unitree_logs
 Start recording:
 
 ```bash
-unitree_rerun_sdk/build/unitree_rerun_recorder \
-  --config unitree_rerun_sdk/examples/recorder.conf
+./record.sh
 ```
+
+If `build/unitree_rerun_recorder` does not exist yet, `record.sh` builds it
+first.
+
+The build copies `examples/recorder.conf` to `build/recorder.conf`, and the
+recorder uses that file by default. Edit `build/recorder.conf` after building,
+or pass `--config path/to/recorder.conf` to use another file.
 
 Stop with `Ctrl-C`.
 
@@ -93,12 +100,25 @@ Install Python Rerun SDK once:
 pip3 install rerun-sdk
 ```
 
+Run the full post-processing pipeline for the latest session:
+
+```bash
+./process_latest.sh
+```
+
+This converts `telemetry.bin` to `recording.rrd`, extracts TN CSV files, and
+plots TN SVGs. You can also pass a session directory or `telemetry.bin`.
+TN plotting uses `config/motor_actuators.conf` to choose the actuator limit for
+each motor. Motors missing from that file fall back to `Go2HV`.
+
 Convert a session:
 
 ```bash
-python3 unitree_rerun_sdk/tools/telemetry_to_rerun.py \
-  unitree_logs/YYYYMMDD_HHMMSS/telemetry.bin
+python3 tools/telemetry_to_rerun.py
 ```
+
+Without an input path, the tool converts the latest session under
+`unitree_logs/`. You can also pass a session directory or `telemetry.bin`.
 
 Open it:
 
@@ -126,8 +146,7 @@ Rerun is intentionally not used for torque-speed analysis. Extract TN demand
 data to CSV instead:
 
 ```bash
-python3 unitree_rerun_sdk/tools/extract_tn.py \
-  unitree_logs/YYYYMMDD_HHMMSS/telemetry.bin
+python3 tools/extract_tn.py
 ```
 
 This writes:
@@ -151,18 +170,17 @@ Each row contains signed and absolute speed/torque:
 Export selected motors only:
 
 ```bash
-python3 unitree_rerun_sdk/tools/extract_tn.py \
-  unitree_logs/YYYYMMDD_HHMMSS/telemetry.bin \
-  --motor m00 --motor m07
+python3 tools/extract_tn.py --motor m00 --motor m07
 ```
 
 Plot extracted TN scatter data against a Unitree actuator torque-speed limit:
 
 ```bash
-python3 unitree_rerun_sdk/tools/plot_tn.py \
-  unitree_logs/YYYYMMDD_HHMMSS/tn_csv \
-  --actuator Go2HV
+python3 tools/plot_tn.py
 ```
+
+Without an input path, `extract_tn.py`, `telemetry_to_rerun.py`, and
+`plot_tn.py` use the latest matching session under `unitree_logs/`.
 
 This writes dependency-free SVG plots and an over-limit summary:
 
@@ -177,6 +195,15 @@ unitree_logs/YYYYMMDD_HHMMSS/tn_plots/
 Available `--actuator` values mirror Unitree's published `UnitreeActuatorCfg`
 classes: `Go2HV`, `M107_15`, `M107_24`, `N5010_16`, `N5020_16`,
 `N7520_14p3`, `N7520_22p5`, and `W4010_25`.
+
+Edit `config/motor_actuators.conf` when the robot uses different motor models
+on different joints:
+
+```ini
+m00=M107_24
+m01=M107_24
+m02=M107_15
+```
 
 ## Demo Data
 

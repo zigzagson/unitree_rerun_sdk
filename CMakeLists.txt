@@ -29,6 +29,12 @@ target_compile_options(unitree_rerun_sdk PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(unitree_rerun_recorder src/main.cpp)
 target_link_libraries(unitree_rerun_recorder PRIVATE unitree_rerun_sdk)
 
+add_custom_command(TARGET unitree_rerun_recorder POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${PROJECT_SOURCE_DIR}/examples/recorder.conf
+        $<TARGET_FILE_DIR:unitree_rerun_recorder>/recorder.conf
+)
+
 install(TARGETS unitree_rerun_sdk unitree_rerun_recorder
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib

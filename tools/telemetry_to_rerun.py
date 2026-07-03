@@ -13,6 +13,21 @@ import rerun as rr
 from telemetry_bin import iter_samples, motor_names, read_header
 
 
+def latest_session_dir(logs_dir: Path = Path("unitree_logs")) -> Path:
+    sessions = sorted(path for path in logs_dir.iterdir() if (path / "telemetry.bin").is_file())
+    if not sessions:
+        raise FileNotFoundError(f"no telemetry sessions found under {logs_dir}")
+    return sessions[-1]
+
+
+def resolve_input_path(input_path: Path | None) -> Path:
+    if input_path is None:
+        return latest_session_dir() / "telemetry.bin"
+    if input_path.is_dir():
+        return input_path / "telemetry.bin"
+    return input_path
+
+
 def log_static_series(motor_count: int) -> None:
     names = motor_names(motor_count)
     for path in (
@@ -81,15 +96,21 @@ def default_output_path(input_path: Path) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="Path to telemetry.bin")
+    parser.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        help="Path to telemetry.bin or a session directory. Default: latest unitree_logs session",
+    )
     parser.add_argument("-o", "--output", type=Path, help="Output .rrd path")
     parser.add_argument("--max-samples", type=int, default=0, help="Convert at most this many samples")
     args = parser.parse_args()
 
-    output = args.output or default_output_path(args.input)
+    input_path = resolve_input_path(args.input)
+    output = args.output or default_output_path(input_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    with args.input.open("rb") as f:
+    with input_path.open("rb") as f:
         header = read_header(f)
         motor_count = int(header["motor_count"])
         rr.init("unitree_lowstate_telemetry", spawn=False)

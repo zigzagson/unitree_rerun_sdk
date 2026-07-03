@@ -26,6 +26,21 @@ FIELDNAMES = [
 ]
 
 
+def latest_session_dir(logs_dir: Path = Path("unitree_logs")) -> Path:
+    sessions = sorted(path for path in logs_dir.iterdir() if (path / "telemetry.bin").is_file())
+    if not sessions:
+        raise FileNotFoundError(f"no telemetry sessions found under {logs_dir}")
+    return sessions[-1]
+
+
+def resolve_input_path(input_path: Path | None) -> Path:
+    if input_path is None:
+        return latest_session_dir() / "telemetry.bin"
+    if input_path.is_dir():
+        return input_path / "telemetry.bin"
+    return input_path
+
+
 def default_output_dir(input_path: Path) -> Path:
     if input_path.name == "telemetry.bin":
         return input_path.parent / "tn_csv"
@@ -83,7 +98,12 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="Path to telemetry.bin")
+    parser.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        help="Path to telemetry.bin or a session directory. Default: latest unitree_logs session",
+    )
     parser.add_argument("-o", "--output-dir", type=Path, help="Directory for TN CSV files")
     parser.add_argument(
         "--motor",
@@ -98,10 +118,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    output_dir = args.output_dir or default_output_dir(args.input)
+    input_path = resolve_input_path(args.input)
+    output_dir = args.output_dir or default_output_dir(input_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with args.input.open("rb") as f:
+    with input_path.open("rb") as f:
         header = read_header(f)
         motor_count = int(header["motor_count"])
         names = motor_names(motor_count)
