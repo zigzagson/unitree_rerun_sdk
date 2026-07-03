@@ -1,4 +1,0 @@
-motor,actuator,rows,plotted,over_limit,over_limit_pct,max_abs_speed_rpm,max_abs_torque_nm
-all,Go2HV,1054,1054,43,4.080,34.7515,44.5605
-m00,Go2HV,527,527,2,0.380,34.7515,24.4416
-m01,Go2HV,527,527,41,7.780,30.3646,44.5605
