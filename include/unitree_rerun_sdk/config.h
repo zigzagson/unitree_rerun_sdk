@@ -14,6 +14,7 @@ struct RecorderConfig {
     int network_mode = 0;
     std::string network_interface = "eno1";
     std::string topic = "rt/lowstate";
+    std::string lowcmd_topic = "rt/lowcmd";
 
     std::string output_dir = "./unitree_logs";
     uint32_t motor_count = kDefaultMotorCount;

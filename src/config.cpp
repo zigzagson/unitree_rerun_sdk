@@ -86,6 +86,8 @@ bool loadConfigFile(const std::string& path, RecorderConfig& config, std::string
                 config.network_interface = value;
             } else if (key == "topic") {
                 config.topic = value;
+            } else if (key == "lowcmd_topic") {
+                config.lowcmd_topic = value;
             } else if (key == "output_dir") {
                 config.output_dir = value;
             } else if (key == "motor_count") {

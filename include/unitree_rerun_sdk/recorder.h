@@ -11,6 +11,7 @@
 #include <string>
 
 #include <unitree/idl/hg/LowState_.hpp>
+#include <unitree/idl/hg/LowCmd_.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
 
 namespace unitree_rerun {
@@ -32,19 +33,27 @@ public:
 
 private:
     void lowStateHandler(const void* message);
+    void lowCmdHandler(const void* message);
     bool shouldSample(uint64_t steady_time_ns);
     bool validateCrc(const unitree_hg::msg::dds_::LowState_& low_state) const;
+    bool validateCrc(const unitree_hg::msg::dds_::LowCmd_& low_cmd) const;
     TelemetrySample makeSample(const unitree_hg::msg::dds_::LowState_& low_state);
+    void copyLatestLowCmd(TelemetrySample& sample);
 
     RecorderConfig config_;
     TelemetryWriter writer_;
     unitree::robot::ChannelSubscriberPtr<unitree_hg::msg::dds_::LowState_> subscriber_;
+    unitree::robot::ChannelSubscriberPtr<unitree_hg::msg::dds_::LowCmd_> lowcmd_subscriber_;
 
     std::atomic<bool> running_;
     std::atomic<uint64_t> sequence_;
     std::atomic<uint64_t> crc_errors_;
+    std::atomic<uint64_t> lowcmd_sequence_;
+    std::atomic<uint64_t> lowcmd_crc_errors_;
     std::mutex sample_mutex_;
     uint64_t last_sample_steady_ns_;
+    std::mutex lowcmd_mutex_;
+    TelemetrySample latest_lowcmd_;
 };
 
 }  // namespace unitree_rerun

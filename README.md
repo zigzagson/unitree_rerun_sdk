@@ -1,6 +1,6 @@
 # unitree_rerun_sdk
 
-Independent Unitree lowstate recorder with an optional Rerun export path.
+Independent Unitree lowstate/lowcmd recorder with an optional Rerun export path.
 
 The robot-side C++ recorder is intentionally small:
 
@@ -36,7 +36,8 @@ This avoids building the C++ Rerun SDK and Arrow stack on the robot.
 
 ## Output
 
-The recorder subscribes to `rt/lowstate`, samples motor/IMU state, and writes:
+The recorder subscribes to `rt/lowstate` and `rt/lowcmd`. Each sampled state is
+stored with the latest command snapshot, its receive sequence, and its age, then writes:
 
 ```text
 unitree_logs/YYYYMMDD_HHMMSS/
@@ -48,10 +49,15 @@ unitree_logs/YYYYMMDD_HHMMSS/
 `telemetry.bin` contains:
 
 - motor `q`, `dq`, `tau_est`
+- commanded motor `mode`, `q`, `dq`, `tau`, `kp`, `kd`, and `reserve`
 - motor case/winding temperature
 - motor state word
 - IMU quaternion, gyro, accel, rpy, temperature
 - sequence, dropped sample count, Unitree source tick
+- latest command receive sequence/time and whether a command has been received
+
+The binary format is version 2. The Python readers remain compatible with existing
+version 1 lowstate-only recordings.
 
 Reserved raw fields such as `q_raw`, `dq_raw`, and `ddq_raw` are not recorded.
 
@@ -73,6 +79,8 @@ default interface is `eth10`:
 ```ini
 network_mode=0
 network_interface=eth10
+topic=rt/lowstate
+lowcmd_topic=rt/lowcmd
 sample_hz=20
 output_dir=./unitree_logs
 ```
@@ -132,6 +140,10 @@ Open it:
 rerun unitree_logs/YYYYMMDD_HHMMSS/recording.rrd
 ```
 
+The generated recording includes a default Rerun Blueprint. On first open, Rerun
+shows expanded panels and organized tabs for position, velocity, torque, LowCmd,
+health, and IMU data without requiring manual view setup.
+
 The `.rrd` groups time-series data under:
 
 - `robot/motors/q`
@@ -140,6 +152,16 @@ The `.rrd` groups time-series data under:
 - `robot/motors/temp_case`
 - `robot/motors/temp_winding`
 - `robot/motors/state`
+- `robot/commands/q`
+- `robot/commands/dq`
+- `robot/commands/tau`
+- `robot/commands/kp`
+- `robot/commands/kd`
+- `robot/commands/header`
+- `robot/commands/reserve`
+- `robot/comparison/q_error`
+- `robot/comparison/dq_error`
+- `robot/comparison/tau_error`
 - `robot/imu/rpy`
 - `robot/imu/gyro`
 - `robot/imu/accel`
@@ -172,6 +194,9 @@ Each row contains signed and absolute speed/torque:
 - `torque_nm`
 - `abs_speed_rpm`
 - `abs_torque_nm`
+
+It also contains the matched command values, command age, and command-minus-state
+errors for position, velocity, and torque.
 
 Export selected motors only:
 

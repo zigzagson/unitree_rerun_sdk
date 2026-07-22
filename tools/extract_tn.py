@@ -20,6 +20,26 @@ FIELDNAMES = [
     "abs_speed_rpm",
     "abs_torque_nm",
     "q_rad",
+    "cmd_received",
+    "cmd_age_ms",
+    "cmd_sequence",
+    "cmd_mode_pr",
+    "cmd_mode_machine",
+    "cmd_mode",
+    "cmd_q_rad",
+    "cmd_dq_rad_s",
+    "cmd_tau_nm",
+    "cmd_kp",
+    "cmd_kd",
+    "cmd_motor_reserve",
+    "cmd_reserve_0",
+    "cmd_reserve_1",
+    "cmd_reserve_2",
+    "cmd_reserve_3",
+    "cmd_crc",
+    "q_error_rad",
+    "dq_error_rad_s",
+    "tau_error_nm",
     "temp_case_c",
     "temp_winding_c",
     "motor_state",
@@ -69,6 +89,7 @@ def sample_rows(sample: dict, motor_indices: list[int], names: list[str]) -> lis
         speed_rad_s = float(sample["dq"][i])
         speed_rpm = speed_rad_s * RAD_S_TO_RPM
         torque_nm = float(sample["tau"][i])
+        has_cmd = bool(sample["lowcmd_received"])
         rows.append(
             {
                 "unix_time_ns": sample["unix_time_ns"],
@@ -80,6 +101,34 @@ def sample_rows(sample: dict, motor_indices: list[int], names: list[str]) -> lis
                 "abs_speed_rpm": abs(speed_rpm),
                 "abs_torque_nm": abs(torque_nm),
                 "q_rad": float(sample["q"][i]),
+                "cmd_received": int(sample["lowcmd_received"]),
+                "cmd_age_ms": (
+                    float(sample["lowcmd_age_ns"]) / 1_000_000.0
+                    if sample["lowcmd_age_ns"] is not None
+                    else -1.0
+                ),
+                "cmd_sequence": int(sample["lowcmd_sequence"]) if has_cmd else "",
+                "cmd_mode_pr": int(sample["lowcmd_mode_pr"]) if has_cmd else "",
+                "cmd_mode_machine": int(sample["lowcmd_mode_machine"]) if has_cmd else "",
+                "cmd_mode": int(sample["cmd_mode"][i]) if has_cmd else "",
+                "cmd_q_rad": float(sample["cmd_q"][i]) if has_cmd else "",
+                "cmd_dq_rad_s": float(sample["cmd_dq"][i]) if has_cmd else "",
+                "cmd_tau_nm": float(sample["cmd_tau"][i]) if has_cmd else "",
+                "cmd_kp": float(sample["cmd_kp"][i]) if has_cmd else "",
+                "cmd_kd": float(sample["cmd_kd"][i]) if has_cmd else "",
+                "cmd_motor_reserve": int(sample["cmd_reserve"][i]) if has_cmd else "",
+                "cmd_reserve_0": int(sample["lowcmd_reserve"][0]) if has_cmd else "",
+                "cmd_reserve_1": int(sample["lowcmd_reserve"][1]) if has_cmd else "",
+                "cmd_reserve_2": int(sample["lowcmd_reserve"][2]) if has_cmd else "",
+                "cmd_reserve_3": int(sample["lowcmd_reserve"][3]) if has_cmd else "",
+                "cmd_crc": int(sample["lowcmd_crc"]) if has_cmd else "",
+                "q_error_rad": float(sample["cmd_q"][i] - sample["q"][i]) if has_cmd else "",
+                "dq_error_rad_s": (
+                    float(sample["cmd_dq"][i] - sample["dq"][i]) if has_cmd else ""
+                ),
+                "tau_error_nm": (
+                    float(sample["cmd_tau"][i] - sample["tau"][i]) if has_cmd else ""
+                ),
                 "temp_case_c": int(sample["temp_case"][i]),
                 "temp_winding_c": int(sample["temp_winding"][i]),
                 "motor_state": int(sample["motor_state"][i]),
@@ -131,7 +180,7 @@ def main() -> int:
         all_rows = []
         per_motor_rows = {names[i]: [] for i in motor_indices}
         sample_count = 0
-        for sample in iter_samples(f, motor_count):
+        for sample in iter_samples(f, motor_count, int(header["version"])):
             rows = sample_rows(sample, motor_indices, names)
             all_rows.extend(rows)
             for row in rows:

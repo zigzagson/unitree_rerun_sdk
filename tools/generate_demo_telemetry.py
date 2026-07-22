@@ -14,6 +14,8 @@ HEADER = struct.Struct("<8sIIIQddI64s32s112s")
 RECORD_PREFIX = struct.Struct("<QQQQIBB2x")
 MOTOR = struct.Struct("<fffhhI")
 IMU = struct.Struct("<13fh2x")
+LOWCMD_PREFIX = struct.Struct("<QQBBB5x4II")
+MOTOR_CMD = struct.Struct("<B3x5fI")
 MAGIC = b"URLOG001"
 
 
@@ -38,7 +40,7 @@ def main() -> int:
             HEADER.pack(
                 MAGIC,
                 HEADER.size,
-                1,
+                2,
                 args.motors,
                 start_ns,
                 args.hz,
@@ -46,7 +48,7 @@ def main() -> int:
                 0,
                 fixed_bytes("demo/lowstate", 64),
                 fixed_bytes("demo0", 32),
-                b"\0" * 112,
+                fixed_bytes("demo/lowcmd", 64) + b"\0" * 48,
             )
         )
 
@@ -85,6 +87,14 @@ def main() -> int:
                     42,
                 )
             )
+
+            f.write(LOWCMD_PREFIX.pack(int(t * 1_000_000_000), seq, 1, 0, 0, 0, 0, 0, 0, 0))
+            for motor in range(args.motors):
+                phase = t * 2.0 + motor * 0.17
+                cmd_q = 0.45 * math.sin(phase + 0.03)
+                cmd_dq = 0.9 * math.cos(phase + 0.03)
+                cmd_tau = 7.5 * math.sin(phase + 0.55)
+                f.write(MOTOR_CMD.pack(1, cmd_q, cmd_dq, cmd_tau, 40.0, 1.0, 0))
 
     print(args.output)
     return 0

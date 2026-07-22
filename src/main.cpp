@@ -66,6 +66,7 @@ int main(int argc, char** argv)
     }
 
     std::cout << "[unitree_rerun] topic=" << config.topic
+              << ", lowcmd_topic=" << config.lowcmd_topic
               << ", interface=" << config.network_interface
               << ", sample_hz=" << config.sample_hz
               << ", motor_count=" << config.motor_count

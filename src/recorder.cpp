@@ -44,6 +44,8 @@ Recorder::Recorder()
     : running_(false)
     , sequence_(0)
     , crc_errors_(0)
+    , lowcmd_sequence_(0)
+    , lowcmd_crc_errors_(0)
     , last_sample_steady_ns_(0)
 {
 }
@@ -66,9 +68,27 @@ bool Recorder::start(const RecorderConfig& config, std::string& error)
         return false;
     }
 
+    running_.store(false);
+    sequence_.store(0);
+    crc_errors_.store(0);
+    lowcmd_sequence_.store(0);
+    lowcmd_crc_errors_.store(0);
+    last_sample_steady_ns_ = 0;
+    {
+        std::lock_guard<std::mutex> lock(lowcmd_mutex_);
+        latest_lowcmd_ = TelemetrySample{};
+    }
+
     try {
         unitree::robot::ChannelFactory::Instance()->Init(
             config_.network_mode, config_.network_interface.c_str());
+
+        lowcmd_subscriber_.reset(
+            new unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowCmd_>(
+                config_.lowcmd_topic));
+        lowcmd_subscriber_->InitChannel(
+            std::bind(&Recorder::lowCmdHandler, this, std::placeholders::_1),
+            1);
 
         subscriber_.reset(
             new unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>(
@@ -78,14 +98,13 @@ bool Recorder::start(const RecorderConfig& config, std::string& error)
             1);
     } catch (const std::exception& e) {
         error = std::string("failed to initialize Unitree subscriber: ") + e.what();
+        subscriber_.reset();
+        lowcmd_subscriber_.reset();
         writer_.stop();
         return false;
     }
 
     running_.store(true);
-    sequence_.store(0);
-    crc_errors_.store(0);
-    last_sample_steady_ns_ = 0;
     std::cout << "[unitree_rerun] recording to " << writer_.sessionDir() << std::endl;
     return true;
 }
@@ -94,6 +113,7 @@ void Recorder::stop()
 {
     running_.store(false);
     subscriber_.reset();
+    lowcmd_subscriber_.reset();
     writer_.stop();
 }
 
@@ -124,10 +144,47 @@ void Recorder::lowStateHandler(const void* message)
     if (!shouldSample(now_steady)) return;
 
     TelemetrySample sample = makeSample(low_state);
-    sample.steady_time_ns = now_steady;
+    copyLatestLowCmd(sample);
+    sample.steady_time_ns = steadyTimeNs();
     sample.unix_time_ns = unixTimeNs();
     sample.sequence = sequence_.fetch_add(1);
     writer_.enqueue(sample);
+}
+
+void Recorder::lowCmdHandler(const void* message)
+{
+    if (!running_.load()) return;
+
+    const auto& low_cmd = *static_cast<const unitree_hg::msg::dds_::LowCmd_*>(message);
+    if (config_.validate_crc && !validateCrc(low_cmd)) {
+        lowcmd_crc_errors_.fetch_add(1);
+        return;
+    }
+
+    TelemetrySample snapshot;
+    snapshot.lowcmd_received = true;
+    snapshot.lowcmd_steady_time_ns = steadyTimeNs();
+    snapshot.lowcmd_sequence = lowcmd_sequence_.fetch_add(1);
+    snapshot.lowcmd_mode_pr = low_cmd.mode_pr();
+    snapshot.lowcmd_mode_machine = low_cmd.mode_machine();
+    snapshot.lowcmd_reserve = low_cmd.reserve();
+    snapshot.lowcmd_crc = low_cmd.crc();
+
+    const auto& motors = low_cmd.motor_cmd();
+    const uint32_t count = std::min<uint32_t>(config_.motor_count, motors.size());
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& motor = motors[i];
+        snapshot.cmd_mode[i] = motor.mode();
+        snapshot.cmd_q[i] = motor.q();
+        snapshot.cmd_dq[i] = motor.dq();
+        snapshot.cmd_tau[i] = motor.tau();
+        snapshot.cmd_kp[i] = motor.kp();
+        snapshot.cmd_kd[i] = motor.kd();
+        snapshot.cmd_reserve[i] = motor.reserve();
+    }
+
+    std::lock_guard<std::mutex> lock(lowcmd_mutex_);
+    latest_lowcmd_ = snapshot;
 }
 
 bool Recorder::shouldSample(uint64_t steady_time_ns)
@@ -149,6 +206,31 @@ bool Recorder::validateCrc(const unitree_hg::msg::dds_::LowState_& low_state) co
 {
     auto copy = low_state;
     return copy.crc() == crc32Core(reinterpret_cast<uint32_t*>(&copy), (sizeof(copy) >> 2) - 1);
+}
+
+bool Recorder::validateCrc(const unitree_hg::msg::dds_::LowCmd_& low_cmd) const
+{
+    auto copy = low_cmd;
+    return copy.crc() == crc32Core(reinterpret_cast<uint32_t*>(&copy), (sizeof(copy) >> 2) - 1);
+}
+
+void Recorder::copyLatestLowCmd(TelemetrySample& sample)
+{
+    std::lock_guard<std::mutex> lock(lowcmd_mutex_);
+    sample.lowcmd_steady_time_ns = latest_lowcmd_.lowcmd_steady_time_ns;
+    sample.lowcmd_sequence = latest_lowcmd_.lowcmd_sequence;
+    sample.lowcmd_received = latest_lowcmd_.lowcmd_received;
+    sample.lowcmd_mode_pr = latest_lowcmd_.lowcmd_mode_pr;
+    sample.lowcmd_mode_machine = latest_lowcmd_.lowcmd_mode_machine;
+    sample.lowcmd_reserve = latest_lowcmd_.lowcmd_reserve;
+    sample.lowcmd_crc = latest_lowcmd_.lowcmd_crc;
+    sample.cmd_mode = latest_lowcmd_.cmd_mode;
+    sample.cmd_q = latest_lowcmd_.cmd_q;
+    sample.cmd_dq = latest_lowcmd_.cmd_dq;
+    sample.cmd_tau = latest_lowcmd_.cmd_tau;
+    sample.cmd_kp = latest_lowcmd_.cmd_kp;
+    sample.cmd_kd = latest_lowcmd_.cmd_kd;
+    sample.cmd_reserve = latest_lowcmd_.cmd_reserve;
 }
 
 TelemetrySample Recorder::makeSample(const unitree_hg::msg::dds_::LowState_& low_state)

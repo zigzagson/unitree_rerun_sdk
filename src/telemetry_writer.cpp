@@ -14,7 +14,7 @@ namespace {
 
 constexpr std::array<char, 8> kMagic = {'U', 'R', 'L', 'O', 'G', '0', '0', '1'};
 constexpr uint32_t kHeaderSize = 256;
-constexpr uint32_t kFormatVersion = 1;
+constexpr uint32_t kFormatVersion = 2;
 
 bool ensureDirExists(const std::string& dir, std::string& error)
 {
@@ -134,7 +134,8 @@ bool TelemetryWriter::openSession(uint64_t start_unix_time_ns, std::string& erro
     summary_stream_.open(session_dir_ + "/summary.csv", std::ios::out | std::ios::trunc);
     if (summary_stream_) {
         summary_stream_ << "unix_time_ns,iso_time,seq,mode_machine,max_temp,max_temp_motor,"
-                        << "avg_temp,imu_temp,max_abs_tau,max_abs_dq,dropped_samples\n";
+                        << "avg_temp,imu_temp,max_abs_tau,max_abs_dq,dropped_samples,"
+                        << "lowcmd_received,lowcmd_sequence,lowcmd_age_ms\n";
     }
 
     std::ofstream meta(session_dir_ + "/meta.txt", std::ios::out | std::ios::trunc);
@@ -146,6 +147,7 @@ bool TelemetryWriter::openSession(uint64_t start_unix_time_ns, std::string& erro
              << "telemetry=telemetry.bin\n"
              << "summary=summary.csv\n"
              << "topic=" << config_.topic << "\n"
+             << "lowcmd_topic=" << config_.lowcmd_topic << "\n"
              << "network_mode=" << config_.network_mode << "\n"
              << "network_interface=" << config_.network_interface << "\n"
              << "motor_count=" << config_.motor_count << "\n"
@@ -169,8 +171,9 @@ bool TelemetryWriter::writeHeader(uint64_t start_unix_time_ns, std::string& erro
     writePod(data_stream_, reserved);
     writeFixedString(data_stream_, config_.topic, 64);
     writeFixedString(data_stream_, config_.network_interface, 32);
+    writeFixedString(data_stream_, config_.lowcmd_topic, 64);
 
-    const std::array<char, 112> reserved_bytes{};
+    const std::array<char, 48> reserved_bytes{};
     data_stream_.write(reserved_bytes.data(), static_cast<std::streamsize>(reserved_bytes.size()));
 
     if (!data_stream_) {
@@ -240,6 +243,33 @@ void TelemetryWriter::writeSample(const TelemetrySample& sample)
     writePod(data_stream_, sample.imu_temp);
     writePod(data_stream_, reserved);
 
+    writePod(data_stream_, sample.lowcmd_steady_time_ns);
+    writePod(data_stream_, sample.lowcmd_sequence);
+    const uint8_t lowcmd_received = sample.lowcmd_received ? 1 : 0;
+    writePod(data_stream_, lowcmd_received);
+    writePod(data_stream_, sample.lowcmd_mode_pr);
+    writePod(data_stream_, sample.lowcmd_mode_machine);
+    const std::array<uint8_t, 5> lowcmd_padding{};
+    data_stream_.write(
+        reinterpret_cast<const char*>(lowcmd_padding.data()),
+        static_cast<std::streamsize>(lowcmd_padding.size()));
+    for (uint32_t value : sample.lowcmd_reserve) writePod(data_stream_, value);
+    writePod(data_stream_, sample.lowcmd_crc);
+
+    const std::array<uint8_t, 3> motor_cmd_padding{};
+    for (uint32_t i = 0; i < config_.motor_count; ++i) {
+        writePod(data_stream_, sample.cmd_mode[i]);
+        data_stream_.write(
+            reinterpret_cast<const char*>(motor_cmd_padding.data()),
+            static_cast<std::streamsize>(motor_cmd_padding.size()));
+        writePod(data_stream_, sample.cmd_q[i]);
+        writePod(data_stream_, sample.cmd_dq[i]);
+        writePod(data_stream_, sample.cmd_tau[i]);
+        writePod(data_stream_, sample.cmd_kp[i]);
+        writePod(data_stream_, sample.cmd_kd[i]);
+        writePod(data_stream_, sample.cmd_reserve[i]);
+    }
+
     writeSummaryIfDue(sample);
 }
 
@@ -267,6 +297,10 @@ void TelemetryWriter::writeSummaryIfDue(const TelemetrySample& sample)
         max_abs_dq = std::max(max_abs_dq, std::abs(sample.dq[i]));
     }
 
+    const double lowcmd_age_ms = sample.lowcmd_received
+        ? static_cast<double>(sample.steady_time_ns - sample.lowcmd_steady_time_ns) / 1000000.0
+        : -1.0;
+
     summary_stream_ << sample.unix_time_ns << ','
                     << isoTime(sample.unix_time_ns) << ','
                     << sample.sequence << ','
@@ -277,7 +311,10 @@ void TelemetryWriter::writeSummaryIfDue(const TelemetrySample& sample)
                     << sample.imu_temp << ','
                     << max_abs_tau << ','
                     << max_abs_dq << ','
-                    << sample.dropped_samples << '\n';
+                    << sample.dropped_samples << ','
+                    << (sample.lowcmd_received ? 1 : 0) << ','
+                    << sample.lowcmd_sequence << ','
+                    << lowcmd_age_ms << '\n';
     last_summary_ns_ = sample.unix_time_ns;
 }
 
